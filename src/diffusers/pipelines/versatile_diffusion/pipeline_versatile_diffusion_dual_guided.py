@@ -65,8 +65,6 @@ class VersatileDiffusionDualGuidedPipeline(DiffusionPipeline):
     vae: AutoencoderKL
     scheduler: Union[DDIMScheduler, PNDMScheduler, LMSDiscreteScheduler]
 
-    _optional_components = ["text_unet"]
-
     def __init__(
         self,
         tokenizer: CLIPTokenizer,
@@ -89,7 +87,6 @@ class VersatileDiffusionDualGuidedPipeline(DiffusionPipeline):
             vae=vae,
             scheduler=scheduler,
         )
-        self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
 
         if self.text_unet is not None and (
             "dual_cross_attention" not in self.image_unet.config or not self.image_unet.config.dual_cross_attention
@@ -145,8 +142,6 @@ class VersatileDiffusionDualGuidedPipeline(DiffusionPipeline):
                 index = int(index)
                 self.image_unet.get_submodule(parent_name)[index] = module.transformers[0]
 
-        self.image_unet.register_to_config(dual_cross_attention=False)
-
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.enable_xformers_memory_efficient_attention with unet->image_unet
     def enable_xformers_memory_efficient_attention(self):
         r"""
@@ -182,14 +177,9 @@ class VersatileDiffusionDualGuidedPipeline(DiffusionPipeline):
                 `attention_head_dim` must be a multiple of `slice_size`.
         """
         if slice_size == "auto":
-            if isinstance(self.image_unet.config.attention_head_dim, int):
-                # half the attention head size is usually a good trade-off between
-                # speed and memory
-                slice_size = self.image_unet.config.attention_head_dim // 2
-            else:
-                # if `attention_head_dim` is a list, take the smallest head size
-                slice_size = min(self.image_unet.config.attention_head_dim)
-
+            # half the attention head size is usually a good trade-off between
+            # speed and memory
+            slice_size = self.image_unet.config.attention_head_dim // 2
         self.image_unet.set_attention_slice(slice_size)
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.disable_attention_slicing
@@ -429,7 +419,7 @@ class VersatileDiffusionDualGuidedPipeline(DiffusionPipeline):
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_latents
     def prepare_latents(self, batch_size, num_channels_latents, height, width, dtype, device, generator, latents=None):
-        shape = (batch_size, num_channels_latents, height // self.vae_scale_factor, width // self.vae_scale_factor)
+        shape = (batch_size, num_channels_latents, height // 8, width // 8)
         if latents is None:
             if device.type == "mps":
                 # randn does not work reproducibly on mps
@@ -464,8 +454,8 @@ class VersatileDiffusionDualGuidedPipeline(DiffusionPipeline):
         prompt: Union[PIL.Image.Image, List[PIL.Image.Image]],
         image: Union[str, List[str]],
         text_to_image_strength: float = 0.5,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
+        height: int = 512,
+        width: int = 512,
         num_inference_steps: int = 50,
         guidance_scale: float = 7.5,
         num_images_per_prompt: Optional[int] = 1,
@@ -484,9 +474,9 @@ class VersatileDiffusionDualGuidedPipeline(DiffusionPipeline):
         Args:
             prompt (`str` or `List[str]`):
                 The prompt or prompts to guide the image generation.
-            height (`int`, *optional*, defaults to self.image_unet.config.sample_size * self.vae_scale_factor):
+            height (`int`, *optional*, defaults to 512):
                 The height in pixels of the generated image.
-            width (`int`, *optional*, defaults to self.image_unet.config.sample_size * self.vae_scale_factor):
+            width (`int`, *optional*, defaults to 512):
                 The width in pixels of the generated image.
             num_inference_steps (`int`, *optional*, defaults to 50):
                 The number of denoising steps. More denoising steps usually lead to a higher quality image at the
@@ -561,9 +551,6 @@ class VersatileDiffusionDualGuidedPipeline(DiffusionPipeline):
             [`~pipelines.stable_diffusion.ImagePipelineOutput`] if `return_dict` is True, otherwise a `tuple. When
             returning a tuple, the first element is a list with the generated images.
         """
-        # 0. Default height and width to unet
-        height = height or self.image_unet.config.sample_size * self.vae_scale_factor
-        width = width or self.image_unet.config.sample_size * self.vae_scale_factor
 
         # 1. Check inputs. Raise error if not correct
         self.check_inputs(prompt, image, height, width, callback_steps)
