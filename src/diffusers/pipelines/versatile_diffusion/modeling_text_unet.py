@@ -28,9 +28,7 @@ def get_down_block(
     resnet_groups=None,
     cross_attention_dim=None,
     downsample_padding=None,
-    dual_cross_attention=False,
-    use_linear_projection=False,
-    only_cross_attention=False,
+    dual_cross_attention=None,
 ):
     down_block_type = down_block_type[7:] if down_block_type.startswith("UNetRes") else down_block_type
     if down_block_type == "DownBlockFlat":
@@ -60,9 +58,6 @@ def get_down_block(
             downsample_padding=downsample_padding,
             cross_attention_dim=cross_attention_dim,
             attn_num_head_channels=attn_num_head_channels,
-            dual_cross_attention=dual_cross_attention,
-            use_linear_projection=use_linear_projection,
-            only_cross_attention=only_cross_attention,
         )
     raise ValueError(f"{down_block_type} is not supported.")
 
@@ -80,9 +75,7 @@ def get_up_block(
     attn_num_head_channels,
     resnet_groups=None,
     cross_attention_dim=None,
-    dual_cross_attention=False,
-    use_linear_projection=False,
-    only_cross_attention=False,
+    dual_cross_attention=None,
 ):
     up_block_type = up_block_type[7:] if up_block_type.startswith("UNetRes") else up_block_type
     if up_block_type == "UpBlockFlat":
@@ -112,9 +105,6 @@ def get_up_block(
             resnet_groups=resnet_groups,
             cross_attention_dim=cross_attention_dim,
             attn_num_head_channels=attn_num_head_channels,
-            dual_cross_attention=dual_cross_attention,
-            use_linear_projection=use_linear_projection,
-            only_cross_attention=only_cross_attention,
         )
     raise ValueError(f"{up_block_type} is not supported.")
 
@@ -307,17 +297,15 @@ class UNetFlatConditionModel(ModelMixin, ConfigMixin):
         self.conv_out = LinearMultiDim(block_out_channels[0], out_channels, kernel_size=3, padding=1)
 
     def set_attention_slice(self, slice_size):
-        head_dims = self.config.attention_head_dim
-        head_dims = [head_dims] if isinstance(head_dims, int) else head_dims
-        if slice_size is not None and any(dim % slice_size != 0 for dim in head_dims):
+        if slice_size is not None and self.config.attention_head_dim % slice_size != 0:
             raise ValueError(
-                f"Make sure slice_size {slice_size} is a common divisor of "
-                f"the number of heads used in cross_attention: {head_dims}"
+                f"Make sure slice_size {slice_size} is a divisor of "
+                f"the number of heads used in cross_attention {self.config.attention_head_dim}"
             )
-        if slice_size is not None and slice_size > min(head_dims):
+        if slice_size is not None and slice_size > self.config.attention_head_dim:
             raise ValueError(
-                f"slice_size {slice_size} has to be smaller or equal to "
-                f"the lowest number of heads used in cross_attention: min({head_dims}) = {min(head_dims)}"
+                f"Chunk_size {slice_size} has to be smaller or equal to "
+                f"the number of heads used in cross_attention {self.config.attention_head_dim}"
             )
 
         for block in self.down_blocks:
@@ -745,17 +733,15 @@ class CrossAttnDownBlockFlat(nn.Module):
         self.gradient_checkpointing = False
 
     def set_attention_slice(self, slice_size):
-        head_dims = self.attn_num_head_channels
-        head_dims = [head_dims] if isinstance(head_dims, int) else head_dims
-        if slice_size is not None and any(dim % slice_size != 0 for dim in head_dims):
+        if slice_size is not None and self.attn_num_head_channels % slice_size != 0:
             raise ValueError(
-                f"Make sure slice_size {slice_size} is a common divisor of "
-                f"the number of heads used in cross_attention: {head_dims}"
+                f"Make sure slice_size {slice_size} is a divisor of "
+                f"the number of heads used in cross_attention {self.attn_num_head_channels}"
             )
-        if slice_size is not None and slice_size > min(head_dims):
+        if slice_size is not None and slice_size > self.attn_num_head_channels:
             raise ValueError(
-                f"slice_size {slice_size} has to be smaller or equal to "
-                f"the lowest number of heads used in cross_attention: min({head_dims}) = {min(head_dims)}"
+                f"Chunk_size {slice_size} has to be smaller or equal to "
+                f"the number of heads used in cross_attention {self.attn_num_head_channels}"
             )
 
         for attn in self.attentions:
@@ -958,17 +944,15 @@ class CrossAttnUpBlockFlat(nn.Module):
         self.gradient_checkpointing = False
 
     def set_attention_slice(self, slice_size):
-        head_dims = self.attn_num_head_channels
-        head_dims = [head_dims] if isinstance(head_dims, int) else head_dims
-        if slice_size is not None and any(dim % slice_size != 0 for dim in head_dims):
+        if slice_size is not None and self.attn_num_head_channels % slice_size != 0:
             raise ValueError(
-                f"Make sure slice_size {slice_size} is a common divisor of "
-                f"the number of heads used in cross_attention: {head_dims}"
+                f"Make sure slice_size {slice_size} is a divisor of "
+                f"the number of heads used in cross_attention {self.attn_num_head_channels}"
             )
-        if slice_size is not None and slice_size > min(head_dims):
+        if slice_size is not None and slice_size > self.attn_num_head_channels:
             raise ValueError(
-                f"slice_size {slice_size} has to be smaller or equal to "
-                f"the lowest number of heads used in cross_attention: min({head_dims}) = {min(head_dims)}"
+                f"Chunk_size {slice_size} has to be smaller or equal to "
+                f"the number of heads used in cross_attention {self.attn_num_head_channels}"
             )
 
         for attn in self.attentions:
@@ -1039,6 +1023,7 @@ class UNetMidBlockFlatCrossAttn(nn.Module):
         cross_attention_dim=1280,
         dual_cross_attention=False,
         use_linear_projection=False,
+        **kwargs,
     ):
         super().__init__()
 
@@ -1106,17 +1091,15 @@ class UNetMidBlockFlatCrossAttn(nn.Module):
         self.resnets = nn.ModuleList(resnets)
 
     def set_attention_slice(self, slice_size):
-        head_dims = self.attn_num_head_channels
-        head_dims = [head_dims] if isinstance(head_dims, int) else head_dims
-        if slice_size is not None and any(dim % slice_size != 0 for dim in head_dims):
+        if slice_size is not None and self.attn_num_head_channels % slice_size != 0:
             raise ValueError(
-                f"Make sure slice_size {slice_size} is a common divisor of "
-                f"the number of heads used in cross_attention: {head_dims}"
+                f"Make sure slice_size {slice_size} is a divisor of "
+                f"the number of heads used in cross_attention {self.attn_num_head_channels}"
             )
-        if slice_size is not None and slice_size > min(head_dims):
+        if slice_size is not None and slice_size > self.attn_num_head_channels:
             raise ValueError(
-                f"slice_size {slice_size} has to be smaller or equal to "
-                f"the lowest number of heads used in cross_attention: min({head_dims}) = {min(head_dims)}"
+                f"Chunk_size {slice_size} has to be smaller or equal to "
+                f"the number of heads used in cross_attention {self.attn_num_head_channels}"
             )
 
         for attn in self.attentions:

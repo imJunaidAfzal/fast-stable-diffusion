@@ -194,10 +194,9 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--prediction_type",
-        type=str,
-        default="epsilon",
-        choices=["epsilon", "sample"],
+        "--predict_epsilon",
+        action="store_true",
+        default=True,
         help="Whether the model should predict the 'epsilon'/noise error or directly the reconstructed image 'x0'.",
     )
 
@@ -257,13 +256,13 @@ def main(args):
             "UpBlock2D",
         ),
     )
-    accepts_prediction_type = "prediction_type" in set(inspect.signature(DDPMScheduler.__init__).parameters.keys())
+    accepts_predict_epsilon = "predict_epsilon" in set(inspect.signature(DDPMScheduler.__init__).parameters.keys())
 
-    if accepts_prediction_type:
+    if accepts_predict_epsilon:
         noise_scheduler = DDPMScheduler(
             num_train_timesteps=args.ddpm_num_steps,
             beta_schedule=args.ddpm_beta_schedule,
-            prediction_type=args.prediction_type,
+            predict_epsilon=args.predict_epsilon,
         )
     else:
         noise_scheduler = DDPMScheduler(num_train_timesteps=args.ddpm_num_steps, beta_schedule=args.ddpm_beta_schedule)
@@ -366,9 +365,9 @@ def main(args):
                 # Predict the noise residual
                 model_output = model(noisy_images, timesteps).sample
 
-                if args.prediction_type == "epsilon":
+                if args.predict_epsilon:
                     loss = F.mse_loss(model_output, noise)  # this could have different weights!
-                elif args.prediction_type == "sample":
+                else:
                     alpha_t = _extract_into_tensor(
                         noise_scheduler.alphas_cumprod, timesteps, (clean_images.shape[0], 1, 1, 1)
                     )
@@ -377,8 +376,6 @@ def main(args):
                         model_output, clean_images, reduction="none"
                     )  # use SNR weighting from distillation paper
                     loss = loss.mean()
-                else:
-                    raise ValueError(f"Unsupported prediction type: {args.prediction_type}")
 
                 accelerator.backward(loss)
 

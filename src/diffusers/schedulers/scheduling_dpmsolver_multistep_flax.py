@@ -23,7 +23,6 @@ import jax
 import jax.numpy as jnp
 
 from ..configuration_utils import ConfigMixin, register_to_config
-from ..utils import deprecate
 from .scheduling_utils_flax import (
     _FLAX_COMPATIBLE_STABLE_DIFFUSION_SCHEDULERS,
     FlaxSchedulerMixin,
@@ -119,9 +118,10 @@ class FlaxDPMSolverMultistepScheduler(FlaxSchedulerMixin, ConfigMixin):
         solver_order (`int`, default `2`):
             the order of DPM-Solver; can be `1` or `2` or `3`. We recommend to use `solver_order=2` for guided
             sampling, and `solver_order=3` for unconditional sampling.
-        prediction_type (`str`, default `epsilon`):
-            indicates whether the model predicts the noise (epsilon), or the data / `x0`. One of `epsilon`, `sample`,
-            or `v-prediction`.
+        predict_epsilon (`bool`, default `True`):
+            we currently support both the noise prediction model and the data prediction model. If the model predicts
+            the noise / epsilon, set `predict_epsilon` to `True`. If the model predicts the data / x0 directly, set
+            `predict_epsilon` to `False`.
         thresholding (`bool`, default `False`):
             whether to use the "dynamic thresholding" method (introduced by Imagen, https://arxiv.org/abs/2205.11487).
             For pixel-space diffusion models, you can set both `algorithm_type=dpmsolver++` and `thresholding=True` to
@@ -149,7 +149,6 @@ class FlaxDPMSolverMultistepScheduler(FlaxSchedulerMixin, ConfigMixin):
     """
 
     _compatibles = _FLAX_COMPATIBLE_STABLE_DIFFUSION_SCHEDULERS.copy()
-    _deprecated_kwargs = ["predict_epsilon"]
 
     @property
     def has_state(self):
@@ -164,23 +163,14 @@ class FlaxDPMSolverMultistepScheduler(FlaxSchedulerMixin, ConfigMixin):
         beta_schedule: str = "linear",
         trained_betas: Optional[jnp.ndarray] = None,
         solver_order: int = 2,
-        prediction_type: str = "epsilon",
+        predict_epsilon: bool = True,
         thresholding: bool = False,
         dynamic_thresholding_ratio: float = 0.995,
         sample_max_value: float = 1.0,
         algorithm_type: str = "dpmsolver++",
         solver_type: str = "midpoint",
         lower_order_final: bool = True,
-        **kwargs,
     ):
-        message = (
-            "Please make sure to instantiate your scheduler with `prediction_type` instead. E.g. `scheduler ="
-            " FlaxDPMSolverMultistepScheduler.from_pretrained(<model_id>, prediction_type='epsilon')`."
-        )
-        predict_epsilon = deprecate("predict_epsilon", "0.10.0", message, take_from=kwargs)
-        if predict_epsilon is not None:
-            self.register_to_config(prediction_type="epsilon" if predict_epsilon else "sample")
-
         if trained_betas is not None:
             self.betas = jnp.asarray(trained_betas)
         elif beta_schedule == "linear":
@@ -252,7 +242,7 @@ class FlaxDPMSolverMultistepScheduler(FlaxSchedulerMixin, ConfigMixin):
         """
         Convert the model output to the corresponding type that the algorithm (DPM-Solver / DPM-Solver++) needs.
 
-        DPM-Solver is designed to discretize an integral of the noise prediction model, and DPM-Solver++ is designed to
+        DPM-Solver is designed to discretize an integral of the noise prediciton model, and DPM-Solver++ is designed to
         discretize an integral of the data prediction model. So we need to first convert the model output to the
         corresponding type to match the algorithm.
 
@@ -270,20 +260,11 @@ class FlaxDPMSolverMultistepScheduler(FlaxSchedulerMixin, ConfigMixin):
         """
         # DPM-Solver++ needs to solve an integral of the data prediction model.
         if self.config.algorithm_type == "dpmsolver++":
-            if self.config.prediction_type == "epsilon":
+            if self.config.predict_epsilon:
                 alpha_t, sigma_t = self.alpha_t[timestep], self.sigma_t[timestep]
                 x0_pred = (sample - sigma_t * model_output) / alpha_t
-            elif self.config.prediction_type == "sample":
-                x0_pred = model_output
-            elif self.config.prediction_type == "v_prediction":
-                alpha_t, sigma_t = self.alpha_t[timestep], self.sigma_t[timestep]
-                x0_pred = alpha_t * sample - sigma_t * model_output
             else:
-                raise ValueError(
-                    f"prediction_type given as {self.config.prediction_type} must be one of `epsilon`, `sample`, "
-                    " or `v_prediction` for the FlaxDPMSolverMultistepScheduler."
-                )
-
+                x0_pred = model_output
             if self.config.thresholding:
                 # Dynamic thresholding in https://arxiv.org/abs/2205.11487
                 dynamic_max_val = jnp.percentile(
@@ -296,21 +277,12 @@ class FlaxDPMSolverMultistepScheduler(FlaxSchedulerMixin, ConfigMixin):
             return x0_pred
         # DPM-Solver needs to solve an integral of the noise prediction model.
         elif self.config.algorithm_type == "dpmsolver":
-            if self.config.prediction_type == "epsilon":
+            if self.config.predict_epsilon:
                 return model_output
-            elif self.config.prediction_type == "sample":
+            else:
                 alpha_t, sigma_t = self.alpha_t[timestep], self.sigma_t[timestep]
                 epsilon = (sample - alpha_t * model_output) / sigma_t
                 return epsilon
-            elif self.config.prediction_type == "v_prediction":
-                alpha_t, sigma_t = self.alpha_t[timestep], self.sigma_t[timestep]
-                epsilon = alpha_t * model_output + sigma_t * sample
-                return epsilon
-            else:
-                raise ValueError(
-                    f"prediction_type given as {self.config.prediction_type} must be one of `epsilon`, `sample`, "
-                    " or `v_prediction` for the FlaxDPMSolverMultistepScheduler."
-                )
 
     def dpm_solver_first_order_update(
         self, model_output: jnp.ndarray, timestep: int, prev_timestep: int, sample: jnp.ndarray
