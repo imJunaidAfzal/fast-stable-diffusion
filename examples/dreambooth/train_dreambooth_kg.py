@@ -20,7 +20,7 @@ from diffusers.optimization import get_scheduler
 from huggingface_hub import HfFolder, Repository, whoami
 from PIL import Image
 from torchvision import transforms
-from tqdm.auto import tqdm
+from tqdm import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
 
@@ -234,6 +234,13 @@ def parse_args():
     )
     
     parser.add_argument(
+        "--Resumetr",
+        type=str,
+        default="False",        
+        help="Resume training info",
+    )    
+    
+    parser.add_argument(
         "--Session_dir",
         type=str,
         default="",     
@@ -335,8 +342,8 @@ class DreamBoothDataset(Dataset):
             pt=pt.replace(")","")
             pt=pt.replace("-","")
             instance_prompt = pt
-            sys.stdout.write(" [0;32m" +instance_prompt+" [0m")
-            sys.stdout.flush()
+            #sys.stdout.write(" [0;32m" +instance_prompt+" [0m")
+            #sys.stdout.flush()
 
 
         example["instance_images"] = self.image_transforms(instance_image)
@@ -475,6 +482,8 @@ def main():
     if args.train_only_unet:
       if os.path.exists(str(args.output_dir+"/text_encoder_trained")):
         text_encoder = CLIPTextModel.from_pretrained(args.output_dir, subfolder="text_encoder_trained")
+      elif os.path.exists(str(args.output_dir+"/text_encoder")):
+        text_encoder = CLIPTextModel.from_pretrained(args.output_dir, subfolder="text_encoder")
       else:
         text_encoder = CLIPTextModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder")
     else:
@@ -520,7 +529,9 @@ def main():
         eps=args.adam_epsilon,
     )
 
-    noise_scheduler = DDPMScheduler.from_config(args.pretrained_model_name_or_path, subfolder="scheduler")
+    noise_scheduler = DDPMScheduler(
+        beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000
+    )
 
     train_dataset = DreamBoothDataset(
         instance_data_root=args.instance_data_dir,
@@ -609,7 +620,7 @@ def main():
     def bar(prg):
        br='|'+'█' * prg + ' ' * (25-prg)+'|'
        return br
-
+    
     # Train!
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
@@ -650,31 +661,23 @@ def main():
                 encoder_hidden_states = text_encoder(batch["input_ids"])[0]
 
                 # Predict the noise residual
-                model_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
-
-                # Get the target for loss depending on the prediction type
-                if noise_scheduler.config.prediction_type == "epsilon":
-                    target = noise
-                elif noise_scheduler.config.prediction_type == "v_prediction":
-                    target = noise_scheduler.get_velocity(latents, noise, timesteps)
-                else:
-                    raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
+                noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
 
                 if args.with_prior_preservation:
-                    # Chunk the noise and model_pred into two parts and compute the loss on each part separately.
-                    model_pred, model_pred_prior = torch.chunk(model_pred, 2, dim=0)
-                    target, target_prior = torch.chunk(target, 2, dim=0)
+                    # Chunk the noise and noise_pred into two parts and compute the loss on each part separately.
+                    noise_pred, noise_pred_prior = torch.chunk(noise_pred, 2, dim=0)
+                    noise, noise_prior = torch.chunk(noise, 2, dim=0)
 
                     # Compute instance loss
-                    loss = F.mse_loss(model_pred.float(), target.float(), reduction="none").mean([1, 2, 3]).mean()
+                    loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="none").mean([1, 2, 3]).mean()
 
                     # Compute prior loss
-                    prior_loss = F.mse_loss(model_pred_prior.float(), target_prior.float(), reduction="mean")
+                    prior_loss = F.mse_loss(noise_pred_prior.float(), noise_prior.float(), reduction="mean")
 
                     # Add the prior loss to the instance loss.
                     loss = loss + args.prior_loss_weight * prior_loss
                 else:
-                    loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+                    loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
@@ -692,14 +695,14 @@ def main():
             if accelerator.sync_gradients:
                 progress_bar.update(1)
                 global_step += 1
-
+                
             fll=round((global_step*100)/args.max_train_steps)
             fll=round(fll/4)
             pr=bar(fll)
             
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
-            progress_bar.set_description_str("Progress:"+pr)
+            progress_bar.set_description_str("Progress:")
             accelerator.log(logs, step=global_step)
 
             if global_step >= args.max_train_steps:
@@ -720,7 +723,7 @@ def main():
                 pipeline.text_encoder.save_pretrained(frz_dir)
                          
             if args.save_n_steps >= 200:
-               if global_step < args.max_train_steps and global_step+1==i:
+               if global_step < args.max_train_steps-100 and global_step+1==i:
                   ckpt_name = "_step_" + str(global_step+1)
                   save_dir = Path(args.output_dir+ckpt_name)
                   save_dir=str(save_dir)
@@ -743,8 +746,8 @@ def main():
                         subprocess.call('rm -r '+save_dir+'/text_encoder/*.*', shell=True)
                         subprocess.call('cp -f '+frz_dir +'/*.* '+ save_dir+'/text_encoder', shell=True)                     
                      chkpth=args.Session_dir+"/"+inst+".ckpt"
-                     subprocess.call('python /content/diffusers/scripts/convert_diffusers_to_original_stable_diffusion.py --model_path ' + save_dir + ' --checkpoint_path ' + chkpth + ' --half', shell=True)
-                     subprocess.call('rm -r '+ save_dir, shell=True)
+                     subprocess.call('python /kaggle/working/diffusers/scripts/convert_diffusers_to_original_stable_diffusion.py --model_path ' + save_dir + ' --checkpoint_path ' + chkpth + ' --half', shell=True)
+                     subprocess.call('rm -r '+ save_dir, shell=True)                      
                      i=i+args.save_n_steps
             
         accelerator.wait_for_everyone()

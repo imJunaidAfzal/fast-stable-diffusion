@@ -215,10 +215,8 @@ def convert_models(model_path: str, output_path: str, opset: int, fp16: bool = F
         )
         del pipeline.safety_checker
         safety_checker = OnnxRuntimeModel.from_pretrained(output_path / "safety_checker")
-        feature_extractor = pipeline.feature_extractor
     else:
         safety_checker = None
-        feature_extractor = None
 
     onnx_pipeline = OnnxStableDiffusionPipeline(
         vae_encoder=OnnxRuntimeModel.from_pretrained(output_path / "vae_encoder"),
@@ -228,8 +226,7 @@ def convert_models(model_path: str, output_path: str, opset: int, fp16: bool = F
         unet=OnnxRuntimeModel.from_pretrained(output_path / "unet"),
         scheduler=pipeline.scheduler,
         safety_checker=safety_checker,
-        feature_extractor=feature_extractor,
-        requires_safety_checker=safety_checker is not None,
+        feature_extractor=pipeline.feature_extractor,
     )
 
     onnx_pipeline.save_pretrained(output_path)

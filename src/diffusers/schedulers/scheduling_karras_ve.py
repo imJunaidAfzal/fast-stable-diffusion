@@ -77,8 +77,6 @@ class KarrasVeScheduler(SchedulerMixin, ConfigMixin):
 
     """
 
-    order = 2
-
     @register_to_config
     def __init__(
         self,

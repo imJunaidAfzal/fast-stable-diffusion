@@ -18,7 +18,7 @@ import argparse
 import os
 
 import torch
-
+import wget
 
 try:
     from omegaconf import OmegaConf
@@ -653,6 +653,14 @@ if __name__ == "__main__":
         type=str,
         help="Type of scheduler to use. Should be one of ['pndm', 'lms', 'ddim', 'euler', 'euler-ancest', 'dpm']",
     )
+    
+    parser.add_argument(
+        "--session_dir",
+        default="",
+        type=str,
+        help="Sessions dir",
+    )    
+    
     parser.add_argument(
         "--extract_ema",
         action="store_true",
@@ -667,9 +675,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.original_config_file is None:
-        os.system(
-            "wget https://raw.githubusercontent.com/CompVis/stable-diffusion/main/configs/stable-diffusion/v1-inference.yaml"
-        )
+        wget.download('https://raw.githubusercontent.com/CompVis/stable-diffusion/main/configs/stable-diffusion/v1-inference.yaml')
         args.original_config_file = "./v1-inference.yaml"
 
     original_config = OmegaConf.load(args.original_config_file)
@@ -731,9 +737,12 @@ if __name__ == "__main__":
     text_model_type = original_config.model.params.cond_stage_config.target.split(".")[-1]
     if text_model_type == "FrozenCLIPEmbedder":
         text_model = convert_ldm_clip_checkpoint(checkpoint)
-        tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-        safety_checker = StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker")
-        feature_extractor = AutoFeatureExtractor.from_pretrained("CompVis/stable-diffusion-safety-checker")
+        if os.path.exists(str(args.session_dir+'/tokenizer')):
+          tokenizer = CLIPTokenizer.from_pretrained(args.session_dir, subfolder="tokenizer")
+        else:
+          tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+        safety_checker = None
+        feature_extractor = None
         pipe = StableDiffusionPipeline(
             vae=vae,
             text_encoder=text_model,

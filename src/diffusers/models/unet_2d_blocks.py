@@ -254,6 +254,7 @@ class UNetMidBlock2D(nn.Module):
         attn_num_head_channels=1,
         attention_type="default",
         output_scale_factor=1.0,
+        **kwargs,
     ):
         super().__init__()
 
@@ -335,6 +336,7 @@ class UNetMidBlock2DCrossAttn(nn.Module):
         cross_attention_dim=1280,
         dual_cross_attention=False,
         use_linear_projection=False,
+        **kwargs,
     ):
         super().__init__()
 
@@ -402,17 +404,15 @@ class UNetMidBlock2DCrossAttn(nn.Module):
         self.resnets = nn.ModuleList(resnets)
 
     def set_attention_slice(self, slice_size):
-        head_dims = self.attn_num_head_channels
-        head_dims = [head_dims] if isinstance(head_dims, int) else head_dims
-        if slice_size is not None and any(dim % slice_size != 0 for dim in head_dims):
+        if slice_size is not None and self.attn_num_head_channels % slice_size != 0:
             raise ValueError(
-                f"Make sure slice_size {slice_size} is a common divisor of "
-                f"the number of heads used in cross_attention: {head_dims}"
+                f"Make sure slice_size {slice_size} is a divisor of "
+                f"the number of heads used in cross_attention {self.attn_num_head_channels}"
             )
-        if slice_size is not None and slice_size > min(head_dims):
+        if slice_size is not None and slice_size > self.attn_num_head_channels:
             raise ValueError(
-                f"slice_size {slice_size} has to be smaller or equal to "
-                f"the lowest number of heads used in cross_attention: min({head_dims}) = {min(head_dims)}"
+                f"Chunk_size {slice_size} has to be smaller or equal to "
+                f"the number of heads used in cross_attention {self.attn_num_head_channels}"
             )
 
         for attn in self.attentions:
@@ -600,17 +600,15 @@ class CrossAttnDownBlock2D(nn.Module):
         self.gradient_checkpointing = False
 
     def set_attention_slice(self, slice_size):
-        head_dims = self.attn_num_head_channels
-        head_dims = [head_dims] if isinstance(head_dims, int) else head_dims
-        if slice_size is not None and any(dim % slice_size != 0 for dim in head_dims):
+        if slice_size is not None and self.attn_num_head_channels % slice_size != 0:
             raise ValueError(
-                f"Make sure slice_size {slice_size} is a common divisor of "
-                f"the number of heads used in cross_attention: {head_dims}"
+                f"Make sure slice_size {slice_size} is a divisor of "
+                f"the number of heads used in cross_attention {self.attn_num_head_channels}"
             )
-        if slice_size is not None and slice_size > min(head_dims):
+        if slice_size is not None and slice_size > self.attn_num_head_channels:
             raise ValueError(
-                f"slice_size {slice_size} has to be smaller or equal to "
-                f"the lowest number of heads used in cross_attention: min({head_dims}) = {min(head_dims)}"
+                f"Chunk_size {slice_size} has to be smaller or equal to "
+                f"the number of heads used in cross_attention {self.attn_num_head_channels}"
             )
 
         for attn in self.attentions:
@@ -1199,17 +1197,15 @@ class CrossAttnUpBlock2D(nn.Module):
         self.gradient_checkpointing = False
 
     def set_attention_slice(self, slice_size):
-        head_dims = self.attn_num_head_channels
-        head_dims = [head_dims] if isinstance(head_dims, int) else head_dims
-        if slice_size is not None and any(dim % slice_size != 0 for dim in head_dims):
+        if slice_size is not None and self.attn_num_head_channels % slice_size != 0:
             raise ValueError(
-                f"Make sure slice_size {slice_size} is a common divisor of "
-                f"the number of heads used in cross_attention: {head_dims}"
+                f"Make sure slice_size {slice_size} is a divisor of "
+                f"the number of heads used in cross_attention {self.attn_num_head_channels}"
             )
-        if slice_size is not None and slice_size > min(head_dims):
+        if slice_size is not None and slice_size > self.attn_num_head_channels:
             raise ValueError(
-                f"slice_size {slice_size} has to be smaller or equal to "
-                f"the lowest number of heads used in cross_attention: min({head_dims}) = {min(head_dims)}"
+                f"Chunk_size {slice_size} has to be smaller or equal to "
+                f"the number of heads used in cross_attention {self.attn_num_head_channels}"
             )
 
         for attn in self.attentions:
